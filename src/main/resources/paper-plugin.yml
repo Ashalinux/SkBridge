@@ -1,15 +1,13 @@
 name: SkBridge
 version: '1.0'
 main: space.ashalinux.skbridge.Main
-api-version: '1.13'
+api-version: '1.26'
 author: Ashalinux
-depend: [Skript, LuckPerms]
-
 description: |
   ==================================================
                   SkBridge Manual
   ==================================================
-  This plugin is a high-performance bridge
+  This plugin is a high-performance Paper bridge
   between Skript, LuckPerms, and Votifier.
   It manages Vanilla scoreboard teams absolutely
   ghost-free, sorts them by weight, and
@@ -19,7 +17,7 @@ description: |
   1. EVENTS (Skript)
   --------------------------------------------------
   - on vote:
-      Triggered when a player votes.
+      Triggered in real-time or on join.
       Values: event-string (Name), event-player
   
   - on luckperms group update:
@@ -45,9 +43,6 @@ description: |
   --------------------------------------------------
   4. VALID TEAM COLORS (LP Meta "color")
   --------------------------------------------------
-  You can use either the full name or just 
-  the number/letter as the value:
-  
   DARK_RED (4)       RED (c)          GOLD (6)
   YELLOW (e)         DARK_GREEN (2)   GREEN (a)
   AQUA (b)           DARK_AQUA (3)    DARK_BLUE (1)
@@ -55,3 +50,12 @@ description: |
   WHITE (f)          GRAY (7)         DARK_GRAY (8)
   BLACK (0)
   ==================================================
+
+dependencies:
+  server:
+    LuckPerms:
+      load: BEFORE
+      required: true
+    Skript:
+      load: BEFORE
+      required: true
