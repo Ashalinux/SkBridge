@@ -59,7 +59,6 @@ public class Main extends JavaPlugin implements Listener {
             return;
         }
 
-        // LuckPerms Event (Optimiert)
         luckPerms.getEventBus().subscribe(this, UserDataRecalculateEvent.class, e -> {
             Player p = Bukkit.getPlayer(e.getUser().getUniqueId());
             if (p != null && p.isOnline()) {
@@ -69,7 +68,6 @@ public class Main extends JavaPlugin implements Listener {
             }
         });
 
-        // Ghost Team Cleanup
         if (Bukkit.getScoreboardManager() != null) {
             Scoreboard mainBoard = Bukkit.getScoreboardManager().getMainScoreboard();
             for (Team team : mainBoard.getTeams()) {
@@ -79,7 +77,6 @@ public class Main extends JavaPlugin implements Listener {
             }
         }
 
-        // Skript Registration
         SkriptAddon addon = Skript.registerAddon(this);
         Bukkit.getPluginManager().registerEvents(this, this);
 
@@ -127,8 +124,6 @@ public class Main extends JavaPlugin implements Listener {
         }
     }
 
-    // --- Events ---
-
     public static class OnlineVoteEvent extends Event {
         private static final HandlerList h = new HandlerList();
         private final Player p;
@@ -146,8 +141,6 @@ public class Main extends JavaPlugin implements Listener {
         @Override public HandlerList getHandlers() { return h; }
         public static HandlerList getHandlerList() { return h; }
     }
-
-    // --- Effect ---
 
     public static class EffSetNameTag extends Effect {
         private Expression<Player> playerExpr;
@@ -216,8 +209,6 @@ public class Main extends JavaPlugin implements Listener {
 
         @Override public String toString(Event e, boolean debug) { return "set name tag"; }
     }
-
-    // --- Expressions ---
 
     public static class ExprLpPrefix extends SimpleExpression<String> {
         private Expression<Player> playerExpr;
@@ -295,8 +286,6 @@ public class Main extends JavaPlugin implements Listener {
         @Override public String toString(Event e, boolean d) { return "lp weight"; }
     }
 
-    // --- Private Methods (RSA & Votifier) ---
-
     private void initializeKeys() {
         File rsaDir = new File(getDataFolder(), "rsa");
         File privFile = new File(rsaDir, "private.key");
@@ -324,7 +313,7 @@ public class Main extends JavaPlugin implements Listener {
                 while (running) {
                     try {
                         Socket socket = serverSocket.accept();
-                        socket.setSoTimeout(5000); // 5 Sekunden Timeout gegen blockierende Sockets
+                        socket.setSoTimeout(5000);
 
                         BufferedWriter out = new BufferedWriter(new OutputStreamWriter(socket.getOutputStream()));
                         out.write("VOTIFIER 1.9\n"); out.flush();
@@ -341,7 +330,6 @@ public class Main extends JavaPlugin implements Listener {
                         }
                         socket.close();
                     } catch (SocketTimeoutException ignored) {
-                        // Wird ignoriert, wir warten einfach auf die nächste Verbindung
                     } catch (Exception ignored) {}
                 }
             } catch (Exception ignored) {}
