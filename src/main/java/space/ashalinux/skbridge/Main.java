@@ -23,8 +23,6 @@ import org.bukkit.event.HandlerList;
 import org.bukkit.event.Listener;
 import org.bukkit.event.player.PlayerJoinEvent;
 import org.bukkit.plugin.java.JavaPlugin;
-import org.bukkit.scoreboard.DisplaySlot;
-import org.bukkit.scoreboard.Objective;
 import org.bukkit.scoreboard.Scoreboard;
 import org.bukkit.scoreboard.Team;
 import org.skriptlang.skript.bukkit.lang.eventvalue.EventValue;
@@ -34,6 +32,7 @@ import javax.crypto.Cipher;
 import java.io.*;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.SocketTimeoutException;
 import java.security.*;
 import java.security.spec.PKCS8EncodedKeySpec;
 import java.util.Base64;
@@ -55,19 +54,22 @@ public class Main extends JavaPlugin implements Listener {
         try {
             luckPerms = LuckPermsProvider.get();
         } catch (IllegalStateException e) {
+            getLogger().severe("LuckPerms not found! Disabling SkBridge.");
             getServer().getPluginManager().disablePlugin(this);
             return;
         }
 
+        // LuckPerms Event (Optimiert)
         luckPerms.getEventBus().subscribe(this, UserDataRecalculateEvent.class, e -> {
             Player p = Bukkit.getPlayer(e.getUser().getUniqueId());
-            if (p != null) {
+            if (p != null && p.isOnline()) {
                 Bukkit.getScheduler().runTask(this, () -> {
                     Bukkit.getPluginManager().callEvent(new LpGroupUpdateEvent(p));
                 });
             }
         });
 
+        // Ghost Team Cleanup
         if (Bukkit.getScoreboardManager() != null) {
             Scoreboard mainBoard = Bukkit.getScoreboardManager().getMainScoreboard();
             for (Team team : mainBoard.getTeams()) {
@@ -77,6 +79,7 @@ public class Main extends JavaPlugin implements Listener {
             }
         }
 
+        // Skript Registration
         SkriptAddon addon = Skript.registerAddon(this);
         Bukkit.getPluginManager().registerEvents(this, this);
 
@@ -97,7 +100,6 @@ public class Main extends JavaPlugin implements Listener {
         Skript.registerExpression(ExprLpGroupDisplayName.class, String.class, ExpressionType.PROPERTY, "luckperms display name of group of %player%");
 
         Skript.registerEffect(EffSetNameTag.class, "set name tag of %player% to %string%");
-        Skript.registerEffect(EffBelowNameScore.class, "set below name score of %player% to %number% [with title %-string%]");
 
         startVoteListener();
     }
@@ -106,7 +108,9 @@ public class Main extends JavaPlugin implements Listener {
     public void onDisable() {
         running = false;
         try {
-            if (serverSocket != null) serverSocket.close();
+            if (serverSocket != null && !serverSocket.isClosed()) {
+                serverSocket.close();
+            }
         } catch (IOException ignored) {}
     }
 
@@ -123,65 +127,28 @@ public class Main extends JavaPlugin implements Listener {
         }
     }
 
-    @SuppressWarnings("unchecked")
-    public static class EffBelowNameScore extends Effect {
-        private Expression<Player> playerExpr;
-        private Expression<Number> scoreExpr;
-        private Expression<String> titleExpr;
+    // --- Events ---
 
-        @Override
-        public boolean init(Expression<?>[] exprs, int matchedPattern, Kleenean isDelayed, SkriptParser.ParseResult parseResult) {
-            playerExpr = (Expression<Player>) exprs[0];
-            scoreExpr = (Expression<Number>) exprs[1];
-            titleExpr = (Expression<String>) exprs[2];
-            return true;
-        }
-
-        @Override
-        protected void execute(Event e) {
-            Player p = playerExpr.getSingle(e);
-            Number scoreNum = scoreExpr.getSingle(e);
-            if (p == null || scoreNum == null) return;
-
-            for (Player target : Bukkit.getOnlinePlayers()) {
-                Scoreboard board = target.getScoreboard();
-                Objective obj = board.getObjective("belowname");
-
-                if (obj == null) {
-                    obj = board.registerNewObjective("belowname", "dummy", " ");
-                    obj.setDisplaySlot(DisplaySlot.BELOW_NAME);
-                }
-
-                if (titleExpr != null) {
-                    String title = titleExpr.getSingle(e);
-                    if (title != null) {
-                        obj.setDisplayName(ChatColor.translateAlternateColorCodes('&', title));
-                    }
-                }
-
-                // Setzt den Score für den Spieler
-                obj.getScore(p.getName()).setScore(scoreNum.intValue());
-
-                // GHOST-NPC-REMOVAL:
-                // Wir gehen sicher, dass nur echte Online-Spieler einen Score haben.
-                // Falls das System Einträge für Entitäten erstellt hat, die keine Spieler sind,
-                // löschen wir diese hier vorsorglich aus dem Objective.
-                for (String entry : board.getEntries()) {
-                    Player check = Bukkit.getPlayerExact(entry);
-                    if (check == null) {
-                        board.resetScores(entry);
-                    }
-                }
-            }
-        }
-
-        @Override
-        public String toString(Event e, boolean debug) {
-            return "set below name score";
-        }
+    public static class OnlineVoteEvent extends Event {
+        private static final HandlerList h = new HandlerList();
+        private final Player p;
+        public OnlineVoteEvent(Player p) { this.p = p; }
+        public Player getPlayer() { return p; }
+        @Override public HandlerList getHandlers() { return h; }
+        public static HandlerList getHandlerList() { return h; }
     }
 
-    @SuppressWarnings("unchecked")
+    public static class LpGroupUpdateEvent extends Event {
+        private static final HandlerList h = new HandlerList();
+        private final Player p;
+        public LpGroupUpdateEvent(Player p) { this.p = p; }
+        public Player getPlayer() { return p; }
+        @Override public HandlerList getHandlers() { return h; }
+        public static HandlerList getHandlerList() { return h; }
+    }
+
+    // --- Effect ---
+
     public static class EffSetNameTag extends Effect {
         private Expression<Player> playerExpr;
         private Expression<String> stringExpr;
@@ -203,16 +170,13 @@ public class Main extends JavaPlugin implements Listener {
             format = ChatColor.translateAlternateColorCodes('&', format);
             p.setPlayerListName(format);
 
-            String prefix;
-            String suffix;
+            String prefix, suffix;
             int nameIndex = format.indexOf(p.getName());
-
             if (nameIndex != -1) {
                 prefix = format.substring(0, nameIndex);
                 suffix = format.substring(nameIndex + p.getName().length());
             } else {
-                prefix = format;
-                suffix = "";
+                prefix = format; suffix = "";
             }
 
             if (prefix.length() > 64) prefix = prefix.substring(0, 64);
@@ -227,22 +191,12 @@ public class Main extends JavaPlugin implements Listener {
                 if (user != null) {
                     groupName = user.getPrimaryGroup();
                     Group group = LuckPermsProvider.get().getGroupManager().getGroup(groupName);
-                    if (group != null) {
-                        if (group.getWeight().isPresent()) {
-                            weight = group.getWeight().getAsInt();
-                        }
-                    }
+                    if (group != null && group.getWeight().isPresent()) weight = group.getWeight().getAsInt();
 
                     String colorMeta = user.getCachedData().getMetaData().getMetaValue("color");
                     if (colorMeta != null) {
                         colorMeta = colorMeta.replace("&", "").toUpperCase();
-                        if (colorMeta.length() == 1) {
-                            teamColor = ChatColor.getByChar(colorMeta.charAt(0));
-                        } else {
-                            try {
-                                teamColor = ChatColor.valueOf(colorMeta);
-                            } catch (Exception ignored) {}
-                        }
+                        teamColor = colorMeta.length() == 1 ? ChatColor.getByChar(colorMeta.charAt(0)) : ChatColor.valueOf(colorMeta);
                     }
                 }
             } catch (Exception ignored) {}
@@ -253,179 +207,107 @@ public class Main extends JavaPlugin implements Listener {
             String teamName = String.format("%05d_%s", Math.max(0, 10000 - weight), safeGroupName);
             if (teamName.length() > 64) teamName = teamName.substring(0, 64);
 
-            Team team = board.getTeam(teamName);
-            if (team == null) {
-                team = board.registerNewTeam(teamName);
-            }
-
+            Team team = board.getTeam(teamName) == null ? board.registerNewTeam(teamName) : board.getTeam(teamName);
             team.setOption(Team.Option.COLLISION_RULE, Team.OptionStatus.NEVER);
-            team.setPrefix(prefix);
-            team.setSuffix(suffix);
-
-            if (teamColor != null) {
-                team.setColor(teamColor);
-            }
-
-            if (!team.hasEntry(p.getName())) {
-                team.addEntry(p.getName());
-            }
+            team.setPrefix(prefix); team.setSuffix(suffix);
+            if (teamColor != null) team.setColor(teamColor);
+            if (!team.hasEntry(p.getName())) team.addEntry(p.getName());
         }
 
-        @Override
-        public String toString(Event e, boolean debug) {
-            return "set name tag of " + playerExpr.toString(e, debug) + " to " + stringExpr.toString(e, debug);
-        }
+        @Override public String toString(Event e, boolean debug) { return "set name tag"; }
     }
 
-    @SuppressWarnings("unchecked")
+    // --- Expressions ---
+
     public static class ExprLpPrefix extends SimpleExpression<String> {
         private Expression<Player> playerExpr;
-
-        @Override
-        public boolean init(Expression<?>[] exprs, int matchedPattern, Kleenean isDelayed, SkriptParser.ParseResult parseResult) {
-            playerExpr = (Expression<Player>) exprs[0];
-            return true;
-        }
-
-        @Override
-        protected String[] get(Event event) {
-            Player p = playerExpr.getSingle(event);
+        @Override public boolean init(Expression<?>[] exprs, int matchedPattern, Kleenean isDelayed, SkriptParser.ParseResult parseResult) { playerExpr = (Expression<Player>) exprs[0]; return true; }
+        @Override protected String[] get(Event e) {
+            Player p = playerExpr.getSingle(e);
             if (p == null) return new String[]{""};
-            User user = LuckPermsProvider.get().getUserManager().getUser(p.getUniqueId());
-            if (user == null || user.getCachedData().getMetaData().getPrefix() == null) return new String[]{""};
-            return new String[]{ChatColor.translateAlternateColorCodes('&', user.getCachedData().getMetaData().getPrefix())};
+            User u = LuckPermsProvider.get().getUserManager().getUser(p.getUniqueId());
+            String pre = (u != null) ? u.getCachedData().getMetaData().getPrefix() : "";
+            return new String[]{ChatColor.translateAlternateColorCodes('&', pre != null ? pre : "")};
         }
-
         @Override public boolean isSingle() { return true; }
         @Override public Class<? extends String> getReturnType() { return String.class; }
-        @Override public String toString(Event event, boolean debug) { return "lp prefix of " + playerExpr.toString(event, debug); }
+        @Override public String toString(Event e, boolean d) { return "lp prefix"; }
     }
 
-    @SuppressWarnings("unchecked")
     public static class ExprLpSuffix extends SimpleExpression<String> {
         private Expression<Player> playerExpr;
-
-        @Override
-        public boolean init(Expression<?>[] exprs, int matchedPattern, Kleenean isDelayed, SkriptParser.ParseResult parseResult) {
-            playerExpr = (Expression<Player>) exprs[0];
-            return true;
-        }
-
-        @Override
-        protected String[] get(Event event) {
-            Player p = playerExpr.getSingle(event);
+        @Override public boolean init(Expression<?>[] exprs, int matchedPattern, Kleenean isDelayed, SkriptParser.ParseResult parseResult) { playerExpr = (Expression<Player>) exprs[0]; return true; }
+        @Override protected String[] get(Event e) {
+            Player p = playerExpr.getSingle(e);
             if (p == null) return new String[]{""};
-            User user = LuckPermsProvider.get().getUserManager().getUser(p.getUniqueId());
-            if (user == null || user.getCachedData().getMetaData().getSuffix() == null) return new String[]{""};
-            return new String[]{ChatColor.translateAlternateColorCodes('&', user.getCachedData().getMetaData().getSuffix())};
+            User u = LuckPermsProvider.get().getUserManager().getUser(p.getUniqueId());
+            String suf = (u != null) ? u.getCachedData().getMetaData().getSuffix() : "";
+            return new String[]{ChatColor.translateAlternateColorCodes('&', suf != null ? suf : "")};
         }
-
         @Override public boolean isSingle() { return true; }
         @Override public Class<? extends String> getReturnType() { return String.class; }
-        @Override public String toString(Event event, boolean debug) { return "lp suffix of " + playerExpr.toString(event, debug); }
+        @Override public String toString(Event e, boolean d) { return "lp suffix"; }
     }
 
-    @SuppressWarnings("unchecked")
     public static class ExprLpGroup extends SimpleExpression<String> {
         private Expression<Player> playerExpr;
-
-        @Override
-        public boolean init(Expression<?>[] exprs, int matchedPattern, Kleenean isDelayed, SkriptParser.ParseResult parseResult) {
-            playerExpr = (Expression<Player>) exprs[0];
-            return true;
+        @Override public boolean init(Expression<?>[] exprs, int matchedPattern, Kleenean isDelayed, SkriptParser.ParseResult parseResult) { playerExpr = (Expression<Player>) exprs[0]; return true; }
+        @Override protected String[] get(Event e) {
+            Player p = playerExpr.getSingle(e);
+            User u = (p != null) ? LuckPermsProvider.get().getUserManager().getUser(p.getUniqueId()) : null;
+            return new String[]{u != null ? u.getPrimaryGroup() : ""};
         }
-
-        @Override
-        protected String[] get(Event event) {
-            Player p = playerExpr.getSingle(event);
-            if (p == null) return new String[]{""};
-            User user = LuckPermsProvider.get().getUserManager().getUser(p.getUniqueId());
-            return new String[]{user != null ? user.getPrimaryGroup() : ""};
-        }
-
         @Override public boolean isSingle() { return true; }
         @Override public Class<? extends String> getReturnType() { return String.class; }
-        @Override public String toString(Event event, boolean debug) { return "lp group of " + playerExpr.toString(event, debug); }
+        @Override public String toString(Event e, boolean d) { return "lp group"; }
     }
 
-    @SuppressWarnings("unchecked")
     public static class ExprLpGroupDisplayName extends SimpleExpression<String> {
         private Expression<Player> playerExpr;
-
-        @Override
-        public boolean init(Expression<?>[] exprs, int matchedPattern, Kleenean isDelayed, SkriptParser.ParseResult parseResult) {
-            playerExpr = (Expression<Player>) exprs[0];
-            return true;
-        }
-
-        @Override
-        protected String[] get(Event event) {
-            Player p = playerExpr.getSingle(event);
+        @Override public boolean init(Expression<?>[] exprs, int matchedPattern, Kleenean isDelayed, SkriptParser.ParseResult parseResult) { playerExpr = (Expression<Player>) exprs[0]; return true; }
+        @Override protected String[] get(Event e) {
+            Player p = playerExpr.getSingle(e);
             if (p == null) return new String[]{""};
-
-            User user = LuckPermsProvider.get().getUserManager().getUser(p.getUniqueId());
-            if (user == null) return new String[]{""};
-
-            String groupName = user.getPrimaryGroup();
-            Group group = LuckPermsProvider.get().getGroupManager().getGroup(groupName);
-
-            if (group != null && group.getDisplayName() != null) {
-                return new String[]{ChatColor.translateAlternateColorCodes('&', group.getDisplayName())};
-            }
-
-            return new String[]{groupName};
+            User u = LuckPermsProvider.get().getUserManager().getUser(p.getUniqueId());
+            if (u == null) return new String[]{""};
+            Group g = LuckPermsProvider.get().getGroupManager().getGroup(u.getPrimaryGroup());
+            String display = (g != null && g.getDisplayName() != null) ? g.getDisplayName() : u.getPrimaryGroup();
+            return new String[]{ChatColor.translateAlternateColorCodes('&', display)};
         }
-
         @Override public boolean isSingle() { return true; }
         @Override public Class<? extends String> getReturnType() { return String.class; }
-        @Override public String toString(Event event, boolean debug) { return "luckperms display name of group of " + playerExpr.toString(event, debug); }
+        @Override public String toString(Event e, boolean d) { return "lp display name"; }
     }
 
-    @SuppressWarnings("unchecked")
     public static class ExprLpWeight extends SimpleExpression<Integer> {
         private Expression<Player> playerExpr;
-
-        @Override
-        public boolean init(Expression<?>[] exprs, int matchedPattern, Kleenean isDelayed, SkriptParser.ParseResult parseResult) {
-            playerExpr = (Expression<Player>) exprs[0];
-            return true;
-        }
-
-        @Override
-        protected Integer[] get(Event event) {
-            Player p = playerExpr.getSingle(event);
+        @Override public boolean init(Expression<?>[] exprs, int matchedPattern, Kleenean isDelayed, SkriptParser.ParseResult parseResult) { playerExpr = (Expression<Player>) exprs[0]; return true; }
+        @Override protected Integer[] get(Event e) {
+            Player p = playerExpr.getSingle(e);
             if (p == null) return new Integer[]{0};
-            User user = LuckPermsProvider.get().getUserManager().getUser(p.getUniqueId());
-            if (user == null) return new Integer[]{0};
-            Group group = LuckPermsProvider.get().getGroupManager().getGroup(user.getPrimaryGroup());
-            return new Integer[]{group != null && group.getWeight().isPresent() ? group.getWeight().getAsInt() : 0};
+            User u = LuckPermsProvider.get().getUserManager().getUser(p.getUniqueId());
+            if (u == null) return new Integer[]{0};
+            Group g = LuckPermsProvider.get().getGroupManager().getGroup(u.getPrimaryGroup());
+            return new Integer[]{g != null && g.getWeight().isPresent() ? g.getWeight().getAsInt() : 0};
         }
-
         @Override public boolean isSingle() { return true; }
         @Override public Class<? extends Integer> getReturnType() { return Integer.class; }
-        @Override public String toString(Event event, boolean debug) { return "lp weight of " + playerExpr.toString(event, debug); }
+        @Override public String toString(Event e, boolean d) { return "lp weight"; }
     }
+
+    // --- Private Methods (RSA & Votifier) ---
 
     private void initializeKeys() {
         File rsaDir = new File(getDataFolder(), "rsa");
         File privFile = new File(rsaDir, "private.key");
-
-        if (!rsaDir.exists()) {
-            rsaDir.mkdirs();
-        }
-
+        if (!rsaDir.exists()) rsaDir.mkdirs();
         try {
             if (!privFile.exists()) {
                 KeyPairGenerator keyGen = KeyPairGenerator.getInstance("RSA");
-                keyGen.initialize(2048);
-                KeyPair pair = keyGen.generateKeyPair();
-                try (FileOutputStream out = new FileOutputStream(privFile)) {
-                    out.write(pair.getPrivate().getEncoded());
-                }
+                keyGen.initialize(2048); KeyPair pair = keyGen.generateKeyPair();
+                try (FileOutputStream out = new FileOutputStream(privFile)) { out.write(pair.getPrivate().getEncoded()); }
                 String pubBase64 = Base64.getEncoder().encodeToString(pair.getPublic().getEncoded());
-                try (PrintWriter pw = new PrintWriter(new File(rsaDir, "public.key"))) {
-                    pw.print(pubBase64);
-                }
+                try (PrintWriter pw = new PrintWriter(new File(rsaDir, "public.key"))) { pw.print(pubBase64); }
                 privateKey = pair.getPrivate();
             } else {
                 byte[] privBytes = java.nio.file.Files.readAllBytes(privFile.toPath());
@@ -437,34 +319,29 @@ public class Main extends JavaPlugin implements Listener {
     private void startVoteListener() {
         Bukkit.getScheduler().runTaskAsynchronously(this, () -> {
             int port = getConfig().getInt("port", 8192);
-            try {
-                serverSocket = new ServerSocket(port);
-
+            try (ServerSocket ss = new ServerSocket(port)) {
+                serverSocket = ss;
                 while (running) {
-                    try (Socket socket = serverSocket.accept()) {
+                    try {
+                        Socket socket = serverSocket.accept();
+                        socket.setSoTimeout(5000); // 5 Sekunden Timeout gegen blockierende Sockets
+
                         BufferedWriter out = new BufferedWriter(new OutputStreamWriter(socket.getOutputStream()));
-                        out.write("VOTIFIER 1.9\n");
-                        out.flush();
+                        out.write("VOTIFIER 1.9\n"); out.flush();
 
                         InputStream in = socket.getInputStream();
-                        byte[] data = new byte[256];
-                        int read = in.read(data);
-
+                        byte[] data = new byte[256]; int read = in.read(data);
                         if (read > 0) {
                             String decrypted = decrypt(data);
                             if (decrypted != null) {
                                 String[] parts = decrypted.split("\\r?\\n");
-                                int userIndex = 1;
-
-                                if (parts[0].trim().equalsIgnoreCase("VOTE")) {
-                                    userIndex = 2;
-                                }
-
-                                if (parts.length > userIndex) {
-                                    handleVote(parts[userIndex].trim());
-                                }
+                                int userIndex = parts[0].trim().equalsIgnoreCase("VOTE") ? 2 : 1;
+                                if (parts.length > userIndex) handleVote(parts[userIndex].trim());
                             }
                         }
+                        socket.close();
+                    } catch (SocketTimeoutException ignored) {
+                        // Wird ignoriert, wir warten einfach auf die nächste Verbindung
                     } catch (Exception ignored) {}
                 }
             } catch (Exception ignored) {}
@@ -476,43 +353,14 @@ public class Main extends JavaPlugin implements Listener {
             Cipher cipher = Cipher.getInstance("RSA");
             cipher.init(Cipher.DECRYPT_MODE, privateKey);
             return new String(cipher.doFinal(data));
-        } catch (Exception e) {
-            return null;
-        }
+        } catch (Exception e) { return null; }
     }
 
     private void handleVote(String name) {
         Bukkit.getScheduler().runTask(this, () -> {
             Player p = Bukkit.getPlayer(name);
-            if (p != null && p.isOnline()) {
-                Bukkit.getPluginManager().callEvent(new OnlineVoteEvent(p));
-            } else {
-                voteQueue.put(name, voteQueue.getOrDefault(name, 0) + 1);
-            }
+            if (p != null && p.isOnline()) { Bukkit.getPluginManager().callEvent(new OnlineVoteEvent(p)); }
+            else { voteQueue.put(name, voteQueue.getOrDefault(name, 0) + 1); }
         });
-    }
-
-    public static class OnlineVoteEvent extends Event {
-        private static final HandlerList h = new HandlerList();
-        private final Player p;
-        public OnlineVoteEvent(Player p) { this.p = p; }
-        public Player getPlayer() { return p; }
-
-        @Override
-        public HandlerList getHandlers() { return h; }
-
-        public static HandlerList getHandlerList() { return h; }
-    }
-
-    public static class LpGroupUpdateEvent extends Event {
-        private static final HandlerList h = new HandlerList();
-        private final Player p;
-        public LpGroupUpdateEvent(Player p) { this.p = p; }
-        public Player getPlayer() { return p; }
-
-        @Override
-        public HandlerList getHandlers() { return h; }
-
-        public static HandlerList getHandlerList() { return h; }
     }
 }
