@@ -287,9 +287,16 @@ public class Main extends JavaPlugin implements Listener {
     }
 
     private void initializeKeys() {
+        // FIX: Sichere Ordner-Erstellung vor dem RSA-Verzeichnis
+        if (!getDataFolder().exists()) {
+            getDataFolder().mkdirs();
+        }
+
         File rsaDir = new File(getDataFolder(), "rsa");
         File privFile = new File(rsaDir, "private.key");
+
         if (!rsaDir.exists()) rsaDir.mkdirs();
+
         try {
             if (!privFile.exists()) {
                 KeyPairGenerator keyGen = KeyPairGenerator.getInstance("RSA");
@@ -345,10 +352,23 @@ public class Main extends JavaPlugin implements Listener {
     }
 
     private void handleVote(String name) {
+        // FIX: Verhindert illegale Namen und Memory Injection
+        if (name == null || !name.matches("^[a-zA-Z0-9_]{3,16}$")) return;
+
         Bukkit.getScheduler().runTask(this, () -> {
-            Player p = Bukkit.getPlayer(name);
-            if (p != null && p.isOnline()) { Bukkit.getPluginManager().callEvent(new OnlineVoteEvent(p)); }
-            else { voteQueue.put(name, voteQueue.getOrDefault(name, 0) + 1); }
+            // FIX: Exact Match statt Bukkit Guessing
+            Player p = Bukkit.getPlayerExact(name);
+            if (p != null && p.isOnline()) {
+                Bukkit.getPluginManager().callEvent(new OnlineVoteEvent(p));
+            } else {
+                // FIX: Anti-Memory-Leak Protection
+                if (voteQueue.size() > 5000) voteQueue.clear();
+
+                int currentVotes = voteQueue.getOrDefault(name, 0);
+                if (currentVotes < 50) { // Maximal 50 Votes pro Offline-Spieler speichern
+                    voteQueue.put(name, currentVotes + 1);
+                }
+            }
         });
     }
 }
